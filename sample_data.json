@@ -1,0 +1,25 @@
+{
+  "nodes": [
+    { "id": "jdoe@lab.local", "type": "User", "label": "jdoe" },
+    { "id": "svc-sql@lab.local", "type": "User", "label": "svc-sql" },
+    { "id": "asmith@lab.local", "type": "User", "label": "asmith" },
+    { "id": "helpdesk@lab.local", "type": "Group", "label": "Help Desk" },
+    { "id": "server-admins@lab.local", "type": "Group", "label": "Server Admins" },
+    { "id": "domain-admins@lab.local", "type": "Group", "label": "Domain Admins" },
+    { "id": "ws-012.lab.local", "type": "Computer", "label": "WS-012" },
+    { "id": "sql-01.lab.local", "type": "Computer", "label": "SQL-01" },
+    { "id": "dc-01.lab.local", "type": "Computer", "label": "DC-01 (Domain Admin target)" }
+  ],
+  "edges": [
+    { "source": "jdoe@lab.local", "target": "helpdesk@lab.local", "type": "MemberOf" },
+    { "source": "helpdesk@lab.local", "target": "ws-012.lab.local", "type": "AdminTo" },
+    { "source": "jdoe@lab.local", "target": "ws-012.lab.local", "type": "HasSession" },
+    { "source": "asmith@lab.local", "target": "ws-012.lab.local", "type": "HasSession" },
+    { "source": "asmith@lab.local", "target": "server-admins@lab.local", "type": "MemberOf" },
+    { "source": "server-admins@lab.local", "target": "sql-01.lab.local", "type": "AdminTo" },
+    { "source": "svc-sql@lab.local", "target": "sql-01.lab.local", "type": "HasSession" },
+    { "source": "svc-sql@lab.local", "target": "domain-admins@lab.local", "type": "MemberOf" },
+    { "source": "domain-admins@lab.local", "target": "dc-01.lab.local", "type": "AdminTo" },
+    { "source": "domain-admins@lab.local", "target": "dc-01.lab.local", "type": "DCSync" }
+  ]
+}

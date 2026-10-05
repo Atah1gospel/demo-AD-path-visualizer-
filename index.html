@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AD Attack Path Visualizer</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0B0C10;
+    --panel: #15161D;
+    --border: #24252F;
+    --text: #E9E9F0;
+    --muted: #83849A;
+    --violet: #8B5CF6;
+    --gold: #E8B84B;
+    --edge: #383B46;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font-family: 'Space Grotesk', sans-serif; overflow: hidden;
+  }
+  #app { display: flex; height: 100vh; }
+  #graph-pane { flex: 1; position: relative; }
+  svg { width: 100%; height: 100%; display: block; }
+
+  header {
+    position: absolute; top: 0; left: 0; right: 0; padding: 20px 24px;
+    display: flex; justify-content: space-between; align-items: flex-start;
+    pointer-events: none; z-index: 2;
+  }
+  h1 { font-size: 18px; margin: 0; font-weight: 700; letter-spacing: -0.3px; }
+  .sub { color: var(--muted); font-size: 12px; margin-top: 4px; font-family: 'JetBrains Mono', monospace; }
+
+  #legend {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px 16px; font-size: 12px; pointer-events: auto;
+  }
+  .legend-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .legend-row:last-child { margin-bottom: 0; }
+  .swatch { width: 10px; height: 10px; border-radius: 3px; }
+
+  #sidebar {
+    width: 300px; background: var(--panel); border-left: 1px solid var(--border);
+    padding: 24px 20px; overflow-y: auto;
+  }
+  #sidebar h2 { font-size: 14px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); margin: 0 0 14px 0; }
+  .empty-state { color: var(--muted); font-size: 13px; line-height: 1.6; }
+  .node-card { background: #1B1D26; border: 1px solid var(--border); border-radius: 10px; padding: 14px; margin-bottom: 14px; }
+  .node-card .label { font-weight: 700; font-size: 14px; margin-bottom: 4px; }
+  .node-card .type { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--violet); }
+  #path-list { margin-top: 8px; }
+  .path-step {
+    font-family: 'JetBrains Mono', monospace; font-size: 12px; padding: 8px 10px;
+    background: #1B1D26; border-left: 2px solid var(--gold); border-radius: 0 6px 6px 0;
+    margin-bottom: 6px; color: var(--text);
+  }
+  .path-step .edge-type { color: var(--gold); }
+  #reset-btn {
+    margin-top: 14px; width: 100%; padding: 10px; background: transparent;
+    border: 1px solid var(--border); color: var(--muted); border-radius: 8px;
+    cursor: pointer; font-family: 'Space Grotesk', sans-serif; font-size: 12px;
+  }
+  #reset-btn:hover { border-color: var(--violet); color: var(--text); }
+
+  .node circle { cursor: pointer; stroke-width: 2; }
+  .node text { fill: var(--text); font-size: 10px; font-family: 'JetBrains Mono', monospace; pointer-events: none; }
+  .link { stroke: var(--edge); stroke-width: 1.5; }
+  .link.highlighted { stroke: var(--gold); stroke-width: 2.5; }
+  .node.dimmed circle, .node.dimmed text { opacity: 0.25; }
+  .link.dimmed { opacity: 0.15; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="graph-pane">
+    <header>
+      <div>
+        <h1>AD Attack Path Visualizer</h1>
+        <div class="sub">lab.local · click any node to trace its path to Domain Admin</div>
+      </div>
+      <div id="legend">
+        <div class="legend-row"><span class="swatch" style="background:#4FC8E0"></span>User</div>
+        <div class="legend-row"><span class="swatch" style="background:#8B5CF6"></span>Group</div>
+        <div class="legend-row"><span class="swatch" style="background:#83849A"></span>Computer</div>
+        <div class="legend-row"><span class="swatch" style="background:#E5484D"></span>Domain Admin target</div>
+      </div>
+    </header>
+    <svg id="graph"></svg>
+  </div>
+  <div id="sidebar">
+    <h2>Node Details</h2>
+    <div id="sidebar-content" class="empty-state">
+      Click a node in the graph to inspect it and, if a path exists, trace the shortest route to Domain Admin control.
+    </div>
+    <button id="reset-btn">Reset selection</button>
+  </div>
+</div>
+
+<script>
+const TARGET_ID = "dc-01.lab.local";
+const TYPE_COLOR = { User: "#4FC8E0", Group: "#8B5CF6", Computer: "#83849A" };
+
+fetch("sample_data.json").then(r => r.json()).then(data => {
+  const nodesById = new Map(data.nodes.map(n => [n.id, n]));
+  const width = window.innerWidth - 300, height = window.innerHeight;
+
+  const svg = d3.select("#graph").attr("viewBox", [0, 0, width, height]);
+  const g = svg.append("g");
+
+  svg.call(d3.zoom().scaleExtent([0.4, 3]).on("zoom", (e) => g.attr("transform", e.transform)));
+
+  // adjacency for pathfinding (undirected BFS is fine for a demo attack-path trace)
+  const adj = new Map(data.nodes.map(n => [n.id, []]));
+  data.edges.forEach(e => {
+    adj.get(e.source).push({ to: e.target, type: e.type });
+  });
+
+  function shortestPath(startId) {
+    if (startId === TARGET_ID) return [];
+    const visited = new Set([startId]);
+    const queue = [[startId, []]];
+    while (queue.length) {
+      const [current, path] = queue.shift();
+      for (const { to, type } of (adj.get(current) || [])) {
+        if (visited.has(to)) continue;
+        const newPath = [...path, { from: current, to, type }];
+        if (to === TARGET_ID) return newPath;
+        visited.add(to);
+        queue.push([to, newPath]);
+      }
+    }
+    return null;
+  }
+
+  const simulation = d3.forceSimulation(data.nodes)
+    .force("link", d3.forceLink(data.edges).id(d => d.id).distance(120))
+    .force("charge", d3.forceManyBody().strength(-380))
+    .force("center", d3.forceCenter(width / 2, height / 2))
+    .force("collision", d3.forceCollide().radius(40));
+
+  const link = g.append("g").selectAll("line")
+    .data(data.edges).join("line").attr("class", "link");
+
+  const linkLabel = g.append("g").selectAll("text")
+    .data(data.edges).join("text")
+    .attr("font-size", 9).attr("fill", "#5A5C6B")
+    .attr("font-family", "'JetBrains Mono', monospace")
+    .text(d => d.type);
+
+  const node = g.append("g").selectAll("g")
+    .data(data.nodes).join("g")
+    .attr("class", "node")
+    .call(d3.drag()
+      .on("start", (e, d) => { if (!e.active) simulation.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
+      .on("drag", (e, d) => { d.fx = e.x; d.fy = e.y; })
+      .on("end", (e, d) => { if (!e.active) simulation.alphaTarget(0); d.fx = null; d.fy = null; }));
+
+  node.append("circle")
+    .attr("r", d => d.id === TARGET_ID ? 16 : 11)
+    .attr("fill", d => d.id === TARGET_ID ? "#E5484D" : TYPE_COLOR[d.type])
+    .attr("stroke", "#0B0C10");
+
+  node.append("text")
+    .attr("dy", -18).attr("text-anchor", "middle")
+    .text(d => d.label);
+
+  node.on("click", (event, d) => selectNode(d.id));
+
+  simulation.on("tick", () => {
+    link.attr("x1", d => d.source.x).attr("y1", d => d.source.y)
+        .attr("x2", d => d.target.x).attr("y2", d => d.target.y);
+    linkLabel.attr("x", d => (d.source.x + d.target.x) / 2)
+              .attr("y", d => (d.source.y + d.target.y) / 2);
+    node.attr("transform", d => `translate(${d.x},${d.y})`);
+  });
+
+  function selectNode(id) {
+    const n = nodesById.get(id);
+    const path = shortestPath(id);
+    const pathIds = new Set([id]);
+    const pathEdgeKeys = new Set();
+    if (path) path.forEach(step => { pathIds.add(step.to); pathEdgeKeys.add(step.from + "→" + step.to); });
+
+    node.classed("dimmed", d => path !== null && !pathIds.has(d.id));
+    link.classed("dimmed", d => path !== null && !pathEdgeKeys.has(d.source.id + "→" + d.target.id));
+    link.classed("highlighted", d => pathEdgeKeys.has(d.source.id + "→" + d.target.id));
+
+    const sidebar = document.getElementById("sidebar-content");
+    let pathHtml = "";
+    if (id === TARGET_ID) {
+      pathHtml = `<div class="path-step">This <strong>is</strong> the Domain Admin target.</div>`;
+    } else if (path === null) {
+      pathHtml = `<div class="path-step" style="border-left-color:#83849A">No path found to Domain Admin from this node.</div>`;
+    } else {
+      pathHtml = `<div id="path-list">` + path.map(step =>
+        `<div class="path-step">${nodesById.get(step.from).label} <span class="edge-type">--${step.type}--></span> ${nodesById.get(step.to).label}</div>`
+      ).join("") + `</div>`;
+    }
+
+    sidebar.innerHTML = `
+      <div class="node-card">
+        <div class="label">${n.label}</div>
+        <div class="type">${n.type}</div>
+      </div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:6px;">
+        ${path === null ? "" : path.length + " hop(s) to Domain Admin:"}
+      </div>
+      ${pathHtml}
+    `;
+  }
+
+  document.getElementById("reset-btn").addEventListener("click", () => {
+    node.classed("dimmed", false);
+    link.classed("dimmed", false).classed("highlighted", false);
+    document.getElementById("sidebar-content").innerHTML =
+      `<div class="empty-state">Click a node in the graph to inspect it and, if a path exists, trace the shortest route to Domain Admin control.</div>`;
+  });
+});
+</script>
+</body>
+</html>
